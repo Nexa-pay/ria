@@ -5,10 +5,11 @@ import sys
 import logging
 import random
 import requests
+import traceback
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed to DEBUG for more details
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -48,8 +49,9 @@ def send_message(chat_id, text):
         'parse_mode': 'Markdown'
     }
     try:
-        response = requests.post(url, json=payload)
-        logger.info(f"Message sent: {response.status_code}")
+        logger.debug(f"Sending message to {chat_id}: {text[:50]}...")
+        response = requests.post(url, json=payload, timeout=10)
+        logger.debug(f"Send message response: {response.status_code} - {response.text[:100]}")
         return response.json()
     except Exception as e:
         logger.error(f"Error sending message: {e}")
@@ -57,22 +59,28 @@ def send_message(chat_id, text):
 
 def handle_command(update):
     """Handle bot commands"""
-    message = update.get('message', {})
-    text = message.get('text', '')
-    chat_id = message.get('chat', {}).get('id')
-    user = message.get('from', {})
-    name = user.get('first_name', 'Member')
-    
-    if not chat_id:
-        return
-    
-    # Handle commands
-    if text == '/start':
-        response = "✅ *Auto-Tagger Activated!*\n\nUse /tag to tag someone!\nUse /help for commands."
-        send_message(chat_id, response)
+    try:
+        logger.debug(f"Received update: {json.dumps(update)[:200]}...")
         
-    elif text == '/help':
-        help_text = """
+        message = update.get('message', {})
+        text = message.get('text', '')
+        chat_id = message.get('chat', {}).get('id')
+        user = message.get('from', {})
+        name = user.get('first_name', 'Member')
+        
+        if not chat_id:
+            logger.warning("No chat_id in update")
+            return
+        
+        logger.info(f"Processing command: '{text}' from user {name} in chat {chat_id}")
+        
+        # Handle commands
+        if text == '/start':
+            response = "✅ *Auto-Tagger Activated!*\n\nUse /tag to tag someone!\nUse /help for commands."
+            send_message(chat_id, response)
+            
+        elif text == '/help':
+            help_text = """
 *🤖 Auto-Tagger Commands*
 
 • /start - Activate bot
@@ -84,31 +92,39 @@ def handle_command(update):
 ✨ Hinglish messages
 💕 Romantic & funny
 🎭 Different every time
-        """
-        send_message(chat_id, help_text)
-        
-    elif text.startswith('/tag'):
-        # Parse tag command
-        parts = text.split(' ', 1)
-        if len(parts) > 1:
-            tag_name = parts[1]
+            """
+            send_message(chat_id, help_text)
+            
+        elif text.startswith('/tag'):
+            # Parse tag command
+            parts = text.split(' ', 1)
+            if len(parts) > 1:
+                tag_name = parts[1]
+            else:
+                tag_name = name
+            
+            # Generate message
+            adjective = random.choice(ADJECTIVES)
+            message_template = random.choice(MESSAGES)
+            emoji = random.choice(EMOJIS)
+            
+            final_message = message_template.format(name=tag_name, adjective=adjective)
+            final_message = f"{final_message} {emoji}"
+            
+            send_message(chat_id, final_message)
+            
         else:
-            tag_name = name
-        
-        # Generate message
-        adjective = random.choice(ADJECTIVES)
-        message_template = random.choice(MESSAGES)
-        emoji = random.choice(EMOJIS)
-        
-        final_message = message_template.format(name=tag_name, adjective=adjective)
-        final_message = f"{final_message} {emoji}"
-        
-        send_message(chat_id, final_message)
+            logger.debug(f"Unknown command: {text}")
+            
+    except Exception as e:
+        logger.error(f"Error in handle_command: {e}\n{traceback.format_exc()}")
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests - for testing"""
         try:
+            logger.info(f"GET request from {self.client_address}")
+            
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
@@ -116,14 +132,15 @@ class handler(BaseHTTPRequestHandler):
             response = {
                 "status": "ok",
                 "message": "🤖 Auto-Tagger Bot is running!",
-                "bot_token_set": bool(BOT_TOKEN)
+                "bot_token_set": bool(BOT_TOKEN),
+                "python_version": sys.version
             }
             
             self.wfile.write(json.dumps(response).encode())
             logger.info("GET request handled successfully")
             
         except Exception as e:
-            logger.error(f"GET error: {e}")
+            logger.error(f"GET error: {e}\n{traceback.format_exc()}")
             self.send_error(500, str(e))
     
     def do_POST(self):
@@ -135,7 +152,7 @@ class handler(BaseHTTPRequestHandler):
             
             # Parse update
             update = json.loads(post_data.decode('utf-8'))
-            logger.info(f"Received update: {update.get('update_id')}")
+            logger.info(f"Received POST update: {update.get('update_id')}")
             
             # Handle the update
             handle_command(update)
@@ -148,8 +165,10 @@ class handler(BaseHTTPRequestHandler):
             response = {"ok": True}
             self.wfile.write(json.dumps(response).encode())
             
+            logger.info("POST request handled successfully")
+            
         except Exception as e:
-            logger.error(f"POST error: {e}")
+            logger.error(f"POST error: {e}\n{traceback.format_exc()}")
             self.send_error(500, str(e))
     
     def log_message(self, format, *args):
