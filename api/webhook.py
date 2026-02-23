@@ -3,6 +3,8 @@ import json
 import os
 import sys
 import logging
+import random
+import requests
 
 # Configure logging
 logging.basicConfig(
@@ -13,7 +15,95 @@ logger = logging.getLogger(__name__)
 
 # Get bot token
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
-logger.info(f"BOT_TOKEN set: {bool(BOT_TOKEN)}")
+TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# Funny and romantic Hinglish messages
+MESSAGES = [
+    "Hey {name} ❤️, tu toh bilkul {adjective} lag raha/rahi hai aaj!",
+    "{name} 😍, teri smile ne mera dil chura liya!",
+    "Oye {name} ✨, teri beauty ka koi answer nahi!",
+    "{name} ji 💕, aapke liye ek special tag!",
+    "Sun {name} 🌟, tu mere group ka sabse pyara member hai!",
+    "{name} baby 😘, miss you in the group!",
+    "Bhai {name} 🚀, tu aaya to group mein jaan aa gayi!",
+    "{name} 😂, tera intezaar tha ki nahi?",
+    "Oye {name} 🎭, tu toh famous ho gaya hai group mein!",
+    "{name} 🌹, tujhe dekh ke dil garden garden ho gaya!",
+]
+
+ADJECTIVES = [
+    "ekdum jhakaas", "superb", "awesome", "mast", "cool", 
+    "dhamakedar", "rocking", "fantastic", "amazing",
+    "pyaara", "sweet", "lovely", "cute", "handsome"
+]
+
+EMOJIS = ["❤️", "💕", "💖", "😍", "🥰", "😘", "✨", "🌟", "⭐"]
+
+def send_message(chat_id, text):
+    """Send message to Telegram"""
+    url = f"{TELEGRAM_API}/sendMessage"
+    payload = {
+        'chat_id': chat_id,
+        'text': text,
+        'parse_mode': 'Markdown'
+    }
+    try:
+        response = requests.post(url, json=payload)
+        logger.info(f"Message sent: {response.status_code}")
+        return response.json()
+    except Exception as e:
+        logger.error(f"Error sending message: {e}")
+        return None
+
+def handle_command(update):
+    """Handle bot commands"""
+    message = update.get('message', {})
+    text = message.get('text', '')
+    chat_id = message.get('chat', {}).get('id')
+    user = message.get('from', {})
+    name = user.get('first_name', 'Member')
+    
+    if not chat_id:
+        return
+    
+    # Handle commands
+    if text == '/start':
+        response = "✅ *Auto-Tagger Activated!*\n\nUse /tag to tag someone!\nUse /help for commands."
+        send_message(chat_id, response)
+        
+    elif text == '/help':
+        help_text = """
+*🤖 Auto-Tagger Commands*
+
+• /start - Activate bot
+• /tag - Tag random member
+• /tag [name] - Tag someone
+• /help - Show this menu
+
+*Features:*
+✨ Hinglish messages
+💕 Romantic & funny
+🎭 Different every time
+        """
+        send_message(chat_id, help_text)
+        
+    elif text.startswith('/tag'):
+        # Parse tag command
+        parts = text.split(' ', 1)
+        if len(parts) > 1:
+            tag_name = parts[1]
+        else:
+            tag_name = name
+        
+        # Generate message
+        adjective = random.choice(ADJECTIVES)
+        message_template = random.choice(MESSAGES)
+        emoji = random.choice(EMOJIS)
+        
+        final_message = message_template.format(name=tag_name, adjective=adjective)
+        final_message = f"{final_message} {emoji}"
+        
+        send_message(chat_id, final_message)
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -25,9 +115,8 @@ class handler(BaseHTTPRequestHandler):
             
             response = {
                 "status": "ok",
-                "message": "Bot is running!",
-                "bot_token_set": bool(BOT_TOKEN),
-                "python_version": sys.version
+                "message": "🤖 Auto-Tagger Bot is running!",
+                "bot_token_set": bool(BOT_TOKEN)
             }
             
             self.wfile.write(json.dumps(response).encode())
@@ -40,38 +129,24 @@ class handler(BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle POST requests - Telegram webhook"""
         try:
-            # Get content length
+            # Read request body
             content_length = int(self.headers.get('Content-Length', 0))
-            
-            # Read the request body
             post_data = self.rfile.read(content_length)
             
-            # Log received data
-            logger.info(f"Received POST with length: {content_length}")
+            # Parse update
+            update = json.loads(post_data.decode('utf-8'))
+            logger.info(f"Received update: {update.get('update_id')}")
             
-            # Parse JSON
-            try:
-                update = json.loads(post_data.decode('utf-8'))
-                logger.info(f"Update ID: {update.get('update_id', 'unknown')}")
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error: {e}")
-                self.send_response(400)
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "Invalid JSON"}).encode())
-                return
-            
-            # Here you would process the Telegram update
-            # For now, just acknowledge
+            # Handle the update
+            handle_command(update)
             
             # Send success response
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             
-            response = {"ok": True, "message": "Update received"}
+            response = {"ok": True}
             self.wfile.write(json.dumps(response).encode())
-            
-            logger.info("POST request handled successfully")
             
         except Exception as e:
             logger.error(f"POST error: {e}")
