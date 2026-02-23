@@ -1,1 +1,1 @@
-# No dependencies needed for this test version
+requests==2.31.0y
