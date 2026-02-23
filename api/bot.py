@@ -2,8 +2,9 @@ from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, ContextTypes
 import logging
 import random
-import asyncio
 import os
+import json
+from http.server import BaseHTTPRequestHandler
 
 # Enable logging
 logging.basicConfig(
@@ -13,7 +14,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Get bot token from environment variable
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
+
+if not BOT_TOKEN:
+    logger.error("BOT_TOKEN not set in environment variables!")
 
 # Store active groups
 active_groups = set()
@@ -75,7 +79,7 @@ async def tag(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     
     try:
-        # Get chat admins (since we can't get all members)
+        # Get chat admins
         admins = await context.bot.get_chat_administrators(chat_id)
         
         # Filter out bots
@@ -156,34 +160,90 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
-async def webhook(request):
-    """Handle webhook requests"""
+# Vercel serverless function handler
+def handler(request):
+    """Main handler for Vercel"""
     global application
     
-    if not application:
-        # Initialize application
-        application = Application.builder().token(BOT_TOKEN).build()
-        
-        # Add handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("stop", stop))
-        application.add_handler(CommandHandler("tag", tag_someone))
-        application.add_handler(CommandHandler("status", status))
-        application.add_handler(CommandHandler("help", help_command))
-    
     try:
-        # Process update
-        update_data = await request.json()
-        update = Update.de_json(update_data, application.bot)
-        await application.process_update(update)
-        return {"status": "ok"}
+        # Handle GET request (for testing)
+        if request.method == "GET":
+            return {
+                "statusCode": 200,
+                "body": json.dumps({
+                    "message": "Bot is running!",
+                    "status": "active",
+                    "bot_token_set": bool(BOT_TOKEN)
+                })
+            }
+        
+        # Handle POST request (Telegram webhook)
+        if request.method == "POST":
+            # Get request body
+            try:
+                body = request.body
+                if isinstance(body, bytes):
+                    body = body.decode('utf-8')
+                
+                update_data = json.loads(body)
+                logger.info(f"Received update: {update_data.get('update_id')}")
+                
+                # Initialize application if needed
+                global application
+                if not application and BOT_TOKEN:
+                    application = Application.builder().token(BOT_TOKEN).build()
+                    
+                    # Add handlers
+                    application.add_handler(CommandHandler("start", start))
+                    application.add_handler(CommandHandler("stop", stop))
+                    application.add_handler(CommandHandler("tag", tag_someone))
+                    application.add_handler(CommandHandler("status", status))
+                    application.add_handler(CommandHandler("help", help_command))
+                
+                if application and BOT_TOKEN:
+                    # Process update
+                    import asyncio
+                    
+                    # Create event loop
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    # Create update object
+                    update = Update.de_json(update_data, application.bot)
+                    
+                    # Process update
+                    loop.run_until_complete(application.process_update(update))
+                    loop.close()
+                    
+                    return {
+                        "statusCode": 200,
+                        "body": json.dumps({"ok": True})
+                    }
+                else:
+                    return {
+                        "statusCode": 500,
+                        "body": json.dumps({
+                            "error": "Bot not initialized",
+                            "bot_token_set": bool(BOT_TOKEN)
+                        })
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Error processing update: {e}")
+                return {
+                    "statusCode": 500,
+                    "body": json.dumps({"error": str(e)})
+                }
+        
+        # Handle other methods
+        return {
+            "statusCode": 405,
+            "body": json.dumps({"error": "Method not allowed"})
+        }
+        
     except Exception as e:
-        logger.error(f"Error processing update: {e}")
-        return {"status": "error", "message": str(e)}
-
-# Vercel serverless function handler
-async def handler(request):
-    """Main handler for Vercel"""
-    if request.method == "POST":
-        return await webhook(request)
-    return {"message": "Bot is running!"}
+        logger.error(f"Handler error: {e}")
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": str(e)})
+        }
